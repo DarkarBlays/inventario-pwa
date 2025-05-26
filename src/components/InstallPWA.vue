@@ -8,47 +8,79 @@
         <path d="M10 2a1 1 0 011 1v6.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 111.414-1.414L9 9.586V3a1 1 0 011-1z"/>
         <path d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z"/>
       </svg>
-      <span>Instalar aplicación</span>
+      <span>{{ installButtonText }}</span>
     </button>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 
 const deferredPrompt = ref(null)
 const showInstallButton = ref(false)
+const isIOS = ref(false)
+
+const installButtonText = computed(() => {
+  return isIOS.value ? 'Instalar en iOS' : 'Instalar aplicación'
+})
+
+const isInStandaloneMode = () => {
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone ||
+    document.referrer.includes('android-app://')
+  )
+}
+
+const checkIOSDevice = () => {
+  const ua = window.navigator.userAgent
+  const iOS = !!ua.match(/iPad/i) || !!ua.match(/iPhone/i)
+  const webkit = !!ua.match(/WebKit/i)
+  isIOS.value = iOS && webkit && !ua.match(/CriOS/i)
+}
 
 const handleBeforeInstallPrompt = (e) => {
   console.log('👋 Evento beforeinstallprompt capturado')
   e.preventDefault()
   deferredPrompt.value = e
-  showInstallButton.value = true
+  updateInstallButton()
 }
 
-const checkInstallState = () => {
-  // Verificar si está en modo standalone
-  if (window.matchMedia('(display-mode: standalone)').matches) {
+const updateInstallButton = () => {
+  // No mostrar el botón si ya está en modo standalone
+  if (isInStandaloneMode()) {
     console.log('📱 La aplicación ya está instalada')
     showInstallButton.value = false
     return
   }
 
-  // Verificar en iOS
-  if (
-    navigator.standalone ||
-    window.navigator.standalone === true
-  ) {
-    console.log('📱 La aplicación ya está instalada (iOS)')
-    showInstallButton.value = false
+  // Para iOS, mostrar instrucciones especiales
+  if (isIOS.value) {
+    console.log('🍎 Dispositivo iOS detectado')
+    showInstallButton.value = true
     return
   }
 
-  // En Android/Desktop, mostrar el botón si tenemos el evento guardado
+  // Para otros dispositivos, mostrar solo si tenemos el prompt
   showInstallButton.value = !!deferredPrompt.value
 }
 
+const showIOSInstructions = () => {
+  // Mostrar un modal o alert con instrucciones para iOS
+  alert(
+    'Para instalar la aplicación en iOS:\n\n' +
+    '1. Toca el botón "Compartir" en la barra de Safari (ícono de cuadrado con flecha)\n' +
+    '2. Desplázate hacia abajo y toca "Agregar a la pantalla de inicio"\n' +
+    '3. Toca "Agregar" en la ventana emergente'
+  )
+}
+
 const installPWA = async () => {
+  if (isIOS.value) {
+    showIOSInstructions()
+    return
+  }
+
   if (!deferredPrompt.value) {
     console.log('❌ No hay prompt de instalación disponible')
     return
@@ -56,7 +88,7 @@ const installPWA = async () => {
 
   try {
     console.log('🚀 Mostrando prompt de instalación')
-    deferredPrompt.value.prompt()
+    await deferredPrompt.value.prompt()
     
     const { outcome } = await deferredPrompt.value.userChoice
     console.log(`✨ Resultado de la instalación: ${outcome}`)
@@ -71,21 +103,47 @@ const installPWA = async () => {
     console.error('❌ Error durante la instalación:', error)
   } finally {
     deferredPrompt.value = null
+    updateInstallButton()
+  }
+}
+
+const handleAppInstalled = () => {
+  console.log('✅ Aplicación instalada exitosamente')
+  showInstallButton.value = false
+  deferredPrompt.value = null
+}
+
+const handleVisibilityChange = () => {
+  if (!document.hidden) {
+    updateInstallButton()
   }
 }
 
 onMounted(() => {
   console.log('🔍 Verificando estado de instalación...')
-  checkInstallState()
   
+  // Detectar iOS
+  checkIOSDevice()
+  
+  // Verificar estado inicial
+  updateInstallButton()
+  
+  // Configurar event listeners
   window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
-  window.addEventListener('appinstalled', () => {
-    console.log('✅ Aplicación instalada exitosamente')
-    showInstallButton.value = false
-  })
+  window.addEventListener('appinstalled', handleAppInstalled)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  
+  // Verificar cambios en el modo de visualización
+  const mediaQuery = window.matchMedia('(display-mode: standalone)')
+  mediaQuery.addListener(updateInstallButton)
 })
 
 onUnmounted(() => {
   window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+  window.removeEventListener('appinstalled', handleAppInstalled)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  
+  const mediaQuery = window.matchMedia('(display-mode: standalone)')
+  mediaQuery.removeListener(updateInstallButton)
 })
 </script> 

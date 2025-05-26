@@ -4,6 +4,7 @@ class ApiService {
     constructor() {
         this.baseURL = API_BASE_URL;
         this.token = localStorage.getItem('token');
+        this.isCheckingConnection = false;
         this.headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
@@ -12,32 +13,74 @@ class ApiService {
 
     getHeaders() {
         const headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         };
-        if (this.token) {
-            headers['Authorization'] = `Bearer ${this.token}`;
+        
+        const token = localStorage.getItem('token');
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
         }
+        
         return headers;
     }
 
     async handleResponse(response) {
+        const contentType = response.headers.get('content-type');
+        const isJson = contentType && contentType.includes('application/json');
+        
         if (!response.ok) {
-            const error = await response.json().catch(() => ({}));
-            throw new Error(error.mensaje || `HTTP error! status: ${response.status}`);
+            let errorMessage = `Error HTTP: ${response.status}`;
+            if (isJson) {
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.mensaje || errorData.message || errorMessage;
+                } catch (e) {
+                    console.error('Error al parsear respuesta de error:', e);
+                }
+            }
+            const error = new Error(errorMessage);
+            error.status = response.status;
+            throw error;
         }
-        return response.json();
+
+        if (isJson) {
+            return response.json();
+        }
+        
+        return response.text();
     }
 
     async checkConnection() {
+        // Evitar múltiples verificaciones simultáneas
+        if (this.isCheckingConnection) {
+            return false;
+        }
+
         try {
+            this.isCheckingConnection = true;
+            
+            if (!navigator.onLine) {
+                console.log('Navegador reporta sin conexión');
+                return false;
+            }
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 segundos timeout
+
             const response = await fetch(`${this.baseURL}/estado`, {
                 method: 'GET',
-                headers: this.getHeaders()
+                headers: this.getHeaders(),
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
             return response.ok;
         } catch (error) {
             console.error('Error de conexión:', error);
             return false;
+        } finally {
+            this.isCheckingConnection = false;
         }
     }
 
@@ -62,18 +105,16 @@ class ApiService {
 
     async post(url, data = {}, config = {}) {
         try {
-            if (!navigator.onLine) {
-                throw new Error('No hay conexión a internet');
-            }
-
-            // Verificar conexión con el backend
-            const isConnected = await this.checkConnection();
-            if (!isConnected) {
-                throw new Error('No se puede conectar con el servidor');
+            // Para login, intentamos directamente sin verificar conexión
+            if (!url.includes('/login')) {
+                const isConnected = await this.checkConnection();
+                if (!isConnected) {
+                    throw new Error('No se puede conectar con el servidor');
+                }
             }
 
             console.log('Enviando POST a:', `${this.baseURL}${url}`);
-            console.log('Datos:', data);
+            console.log('Datos:', url.includes('login') ? { ...data, password: '***' } : data);
 
             const response = await fetch(`${this.baseURL}${url}`, {
                 method: 'POST',
@@ -82,12 +123,26 @@ class ApiService {
                 ...config
             });
 
-            return this.handleResponse(response);
+            const result = await this.handleResponse(response);
+            
+            // Si es login exitoso, actualizar el token
+            if (url.includes('/login') && result.token) {
+                localStorage.setItem('token', result.token);
+                this.token = result.token;
+            }
+
+            return result;
         } catch (error) {
             console.error('Error en POST:', error);
-            if (!navigator.onLine) {
-                await this.saveForSync('POST', url, data);
+            
+            // Si es un error de red o timeout, marcar como offline
+            if (!navigator.onLine || error.name === 'AbortError' || error.message.includes('Failed to fetch')) {
+                if (!url.includes('/login')) {
+                    await this.saveForSync('POST', url, data);
+                }
+                throw new Error('No hay conexión a internet');
             }
+            
             throw error;
         }
     }

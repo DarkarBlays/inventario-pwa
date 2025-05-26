@@ -2,7 +2,7 @@
   "name": "Inventario PWA",
   "short_name": "Inventario",
   "description": "Aplicación de inventario con funcionalidad offline",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#4f46e5",
@@ -12,7 +12,7 @@
       "src": "/pwa-192x192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "/pwa-512x512.png",
@@ -30,7 +30,7 @@
       "src": "/pwa-384x384.png",
       "sizes": "384x384",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ],
   "screenshots": [
@@ -40,6 +40,13 @@
       "type": "image/png",
       "form_factor": "wide",
       "label": "Pantalla de inventario"
+    },
+    {
+      "src": "/screenshot-mobile.png",
+      "sizes": "750x1334",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Vista móvil del inventario"
     }
   ],
   "categories": ["business", "productivity"],
@@ -48,11 +55,32 @@
     {
       "name": "Agregar Producto",
       "url": "/inventory?action=add",
-      "description": "Agregar un nuevo producto al inventario"
+      "description": "Agregar un nuevo producto al inventario",
+      "icons": [
+        {
+          "src": "/add-product-96x96.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Ver Inventario",
+      "url": "/inventory",
+      "description": "Ver lista de productos en inventario",
+      "icons": [
+        {
+          "src": "/list-96x96.png",
+          "sizes": "96x96"
+        }
+      ]
     }
   ],
-  "id": "/",
+  "id": "inventario-pwa-v1",
   "scope": "/",
   "lang": "es",
-  "dir": "ltr"
+  "dir": "ltr",
+  "display_override": ["standalone", "minimal-ui"],
+  "launch_handler": {
+    "client_mode": ["navigate-existing", "auto"]
+  }
 } 

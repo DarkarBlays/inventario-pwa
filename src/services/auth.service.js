@@ -1,54 +1,125 @@
 import { api } from './api';
-import { saveAuthData, getAuthData, clearAuthData } from './indexedDB';
+import { saveAuthData, clearAuthData, getDB, STORES, initDB } from './indexedDB';
 
 const OFFLINE_CREDENTIALS_KEY = 'offline_credentials';
 
+const comparePasswords = async (inputPassword, storedPassword) => {
+    try {
+        // Decodificar la contraseña almacenada
+        const decodedPassword = atob(storedPassword);
+        return inputPassword === decodedPassword;
+    } catch (error) {
+        console.error('Error al comparar contraseñas:', error);
+        return false;
+    }
+};
+
+const getAuthData = async () => {
+    try {
+        await initDB(); // Aseguramos que la DB está inicializada
+        const db = getDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction([STORES.AUTH], 'readonly');
+            const store = transaction.objectStore(STORES.AUTH);
+            const request = store.getAll();
+
+            request.onsuccess = () => {
+                const result = request.result[0];
+                resolve(result);
+            };
+
+            request.onerror = () => {
+                reject(request.error);
+            };
+        });
+    } catch (error) {
+        console.error('Error al obtener datos de autenticación:', error);
+        return null;
+    }
+};
+
 export const authService = {
-    async login(email, password) {
+    async login(credentials) {
         try {
+            console.log('Iniciando proceso de login...');
+            
+            // Verificar si hay credenciales almacenadas antes de intentar online
+            const storedAuthData = await getAuthData();
+            const offlineAvailable = storedAuthData && 
+                                   storedAuthData.email === credentials.email &&
+                                   await comparePasswords(credentials.password, storedAuthData.password);
+
+            // Intentar login online si hay conexión
             if (navigator.onLine) {
-                // Intento de login online
-                const response = await api.post('/usuarios/login', { email, password });
-                if (!response || !response.token || !response.usuario) {
-                    throw new Error('Respuesta de autenticación inválida');
-                }
-                
-                // Guardar credenciales para uso offline
-                const credentials = {
-                    email,
-                    password: btoa(password), // Codificación básica
-                    token: response.token,
-                    usuario: response.usuario,
-                    timestamp: new Date().toISOString()
-                };
+                try {
+                    console.log('Intentando login online...');
+                    const response = await api.post('/usuarios/login', credentials);
+                    
+                    if (!response || !response.token || !response.usuario) {
+                        throw new Error('Respuesta de autenticación inválida');
+                    }
 
-                // Guardar en IndexedDB y localStorage
-                await saveAuthData(credentials);
-                localStorage.setItem(OFFLINE_CREDENTIALS_KEY, JSON.stringify(credentials));
-                localStorage.setItem('token', response.token);
-                localStorage.setItem('usuario', JSON.stringify(response.usuario));
-                
-                return response;
-            } else {
-                // Intento de login offline
-                const storedCredentials = await getAuthData() || 
-                                        JSON.parse(localStorage.getItem(OFFLINE_CREDENTIALS_KEY) || 'null');
-                
-                if (!storedCredentials) {
-                    throw new Error('No hay credenciales almacenadas para uso offline');
-                }
-
-                if (email === storedCredentials.email && btoa(password) === storedCredentials.password) {
-                    localStorage.setItem('token', storedCredentials.token);
-                    localStorage.setItem('usuario', JSON.stringify(storedCredentials.usuario));
-                    return {
-                        token: storedCredentials.token,
-                        usuario: storedCredentials.usuario,
-                        offline: true
+                    // Preparar datos para IndexedDB
+                    const authData = {
+                        email: credentials.email,
+                        password: btoa(credentials.password),
+                        token: response.token,
+                        usuario: response.usuario,
+                        timestamp: new Date().toISOString()
                     };
+
+                    // Guardar datos offline
+                    await Promise.all([
+                        saveAuthData(authData),
+                        localStorage.setItem(OFFLINE_CREDENTIALS_KEY, JSON.stringify(authData)),
+                        localStorage.setItem('token', response.token),
+                        localStorage.setItem('usuario', JSON.stringify(response.usuario))
+                    ]);
+
+                    console.log('Login online exitoso');
+                    return {
+                        token: response.token,
+                        usuario: response.usuario,
+                        offline: false
+                    };
+                } catch (onlineError) {
+                    console.error('Error en login online:', onlineError);
+                    
+                    // Si hay credenciales offline válidas, usarlas como fallback
+                    if (offlineAvailable) {
+                        console.log('Usando credenciales offline como fallback');
+                        return {
+                            token: storedAuthData.token,
+                            usuario: storedAuthData.usuario,
+                            offline: true
+                        };
+                    }
+                    
+                    throw onlineError;
                 }
-                throw new Error('Credenciales incorrectas');
             }
+
+            // Login offline
+            console.log('Intentando login offline...');
+            
+            if (!storedAuthData) {
+                throw new Error('No hay credenciales almacenadas para modo offline');
+            }
+
+            if (!offlineAvailable) {
+                throw new Error('Credenciales inválidas en modo offline');
+            }
+
+            // Actualizar localStorage para mantener consistencia
+            localStorage.setItem('token', storedAuthData.token);
+            localStorage.setItem('usuario', JSON.stringify(storedAuthData.usuario));
+
+            console.log('Login offline exitoso');
+            return {
+                token: storedAuthData.token,
+                usuario: storedAuthData.usuario,
+                offline: true
+            };
         } catch (error) {
             console.error('Error en login:', error);
             throw error;
@@ -72,14 +143,14 @@ export const authService = {
         try {
             if (navigator.onLine) {
                 const response = await api.get('/usuarios/perfil');
-                // Actualizar datos locales con la respuesta del servidor
                 if (response.data) {
                     const authData = await getAuthData();
                     if (authData) {
-                        await saveAuthData({
+                        const updatedAuthData = {
                             ...authData,
                             usuario: response.data
-                        });
+                        };
+                        await saveAuthData(updatedAuthData);
                     }
                 }
                 return response;
@@ -98,7 +169,6 @@ export const authService = {
 
     async cerrarSesion() {
         try {
-            // Primero intentar cerrar sesión en el servidor si estamos online
             if (navigator.onLine) {
                 try {
                     const token = localStorage.getItem('token');
@@ -107,11 +177,9 @@ export const authService = {
                     }
                 } catch (error) {
                     console.error('Error al cerrar sesión en el servidor:', error);
-                    // Continuamos con la limpieza local incluso si hay error en el servidor
                 }
             }
             
-            // Después limpiamos los datos locales
             await clearAuthData();
             localStorage.removeItem('token');
             localStorage.removeItem('usuario');
@@ -174,5 +242,22 @@ export const authService = {
         } catch (error) {
             console.error('Error al sincronizar credenciales:', error);
         }
+    },
+
+    async logout() {
+        localStorage.removeItem('token');
+        localStorage.removeItem('usuario');
+        
+        // Limpiar datos de autenticación en IndexedDB
+        const db = getDB();
+        const transaction = db.transaction([STORES.AUTH], 'readwrite');
+        const store = transaction.objectStore(STORES.AUTH);
+        await store.clear();
+    },
+
+    isAuthenticated() {
+        return !!localStorage.getItem('token');
     }
-}; 
+};
+
+export default authService; 

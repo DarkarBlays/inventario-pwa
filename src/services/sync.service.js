@@ -3,47 +3,83 @@ import { useAuthStore } from '../stores/auth.store';
 
 class SyncService {
     constructor() {
-        this.setupConnectionListeners();
+        this.syncInterval = null;
+        this.initialize();
     }
 
-    setupConnectionListeners() {
-        window.addEventListener('online', this.handleConnectionRestore.bind(this));
-        window.addEventListener('offline', this.handleConnectionLost.bind(this));
+    initialize() {
+        // Escuchar cambios en la conexión
+        window.addEventListener('online', () => this.handleOnline());
+        window.addEventListener('offline', () => this.handleOffline());
+
+        // Iniciar sincronización si estamos online
+        if (navigator.onLine) {
+            this.startSync();
+        }
     }
 
-    async handleConnectionRestore() {
-        console.log('Conexión restaurada - Iniciando sincronización');
+    async handleOnline() {
+        console.log('Conexión recuperada - Iniciando sincronización...');
         const authStore = useAuthStore();
         const productStore = useProductStore();
-        
-        if (!authStore.estaAutenticado) {
-            console.log('Usuario no autenticado - Sincronización cancelada');
+
+        if (authStore.estaAutenticado) {
+            try {
+                await authStore.sincronizarCredenciales();
+                await productStore.syncOfflineProducts();
+                this.startSync();
+            } catch (error) {
+                console.error('Error en la sincronización al recuperar conexión:', error);
+            }
+        }
+    }
+
+    handleOffline() {
+        console.log('Conexión perdida - Deteniendo sincronización');
+        this.stopSync();
+    }
+
+    startSync() {
+        if (this.syncInterval) return;
+
+        this.syncInterval = setInterval(async () => {
+            const authStore = useAuthStore();
+            const productStore = useProductStore();
+
+            if (authStore.estaAutenticado && navigator.onLine) {
+                try {
+                    await productStore.syncWithBackend();
+                } catch (error) {
+                    console.error('Error en la sincronización automática:', error);
+                }
+            }
+        }, 300000); // Sincronizar cada 5 minutos
+    }
+
+    stopSync() {
+        if (this.syncInterval) {
+            clearInterval(this.syncInterval);
+            this.syncInterval = null;
+        }
+    }
+
+    async forceSyncNow() {
+        if (!navigator.onLine) {
+            console.log('No hay conexión para sincronizar');
             return;
         }
 
-        try {
-            await this.syncAll();
-            // En lugar de recargar la página, actualizamos los datos
-            await productStore.initializeStore();
-            console.log('Sincronización y actualización completada');
-        } catch (error) {
-            console.error('Error durante la sincronización:', error);
-        }
-    }
-
-    handleConnectionLost() {
-        console.log('Conexión perdida - Modo offline activado');
-    }
-
-    async syncAll() {
+        const authStore = useAuthStore();
         const productStore = useProductStore();
-        
-        try {
-            await productStore.syncOfflineProducts();
-            console.log('Sincronización completada exitosamente');
-        } catch (error) {
-            console.error('Error en sincronización:', error);
-            throw error;
+
+        if (authStore.estaAutenticado) {
+            try {
+                await productStore.syncOfflineProducts();
+                await productStore.syncWithBackend();
+            } catch (error) {
+                console.error('Error en la sincronización forzada:', error);
+                throw error;
+            }
         }
     }
 }

@@ -62,6 +62,23 @@ const getHeaders = (endpoint) => {
     return headers;
 };
 
+// Función para verificar la conectividad con el servidor
+const checkServerConnectivity = async () => {
+    try {
+        console.log('Verificando conectividad con el servidor...');
+        const response = await fetch(`${API_URL}/health`, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+        });
+        const isAvailable = response.ok;
+        console.log('Servidor disponible:', isAvailable);
+        return isAvailable;
+    } catch (error) {
+        console.warn('Error al verificar conectividad:', error);
+        return false;
+    }
+};
+
 export const api = {
     async get(endpoint) {
         try {

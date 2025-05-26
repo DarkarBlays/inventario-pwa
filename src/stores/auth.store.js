@@ -51,7 +51,7 @@ export const useAuthStore = defineStore('auth', {
                 this.loading = true;
                 this.error = null;
                 
-                const response = await authService.login(credentials.email, credentials.password);
+                const response = await authService.login(credentials);
                 this.setAuthData(response.usuario, response.token);
                 
                 // Inicializar store de productos después del login solo si es necesario

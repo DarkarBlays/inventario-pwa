@@ -7,32 +7,67 @@ import { syncService } from './services/sync.service'
 import { registerSW } from 'virtual:pwa-register'
 import { initDB } from './services/indexedDB'
 
+// Registrar Service Worker
+const updateSW = registerSW({
+  onNeedRefresh() {
+    console.log('Nueva versión disponible de la aplicación');
+    // Aquí podrías mostrar un diálogo para actualizar
+    if (confirm('Hay una nueva versión disponible. ¿Deseas actualizar?')) {
+      updateSW();
+    }
+  },
+  onOfflineReady() {
+    console.log('Aplicación lista para uso offline');
+  },
+  onRegistered(swRegistration) {
+    console.log('Service Worker registrado:', swRegistration);
+    
+    // Verificar y manejar actualizaciones
+    swRegistration.update().catch(error => {
+      console.warn('Error al verificar actualizaciones del SW:', error);
+    });
+
+    // Configurar verificación periódica de actualizaciones
+    setInterval(() => {
+      swRegistration.update().catch(console.warn);
+    }, 60 * 60 * 1000); // Cada hora
+  },
+  onRegisterError(error) {
+    console.error('Error al registrar Service Worker:', error);
+    // Intentar recuperarse del error
+    setTimeout(() => {
+      window.location.reload();
+    }, 3000);
+  },
+  immediate: true
+});
+
 // Función de inicialización asíncrona
 async function initializeApp() {
   try {
     console.log('Iniciando aplicación...');
     
-    // Inicializar IndexedDB primero y esperar a que termine
+    // Inicializar IndexedDB primero
     console.log('Inicializando IndexedDB...');
-    await initDB();
-    console.log('IndexedDB inicializada correctamente');
-
-    // Crear la instancia de Pinia
+    try {
+      await initDB();
+      console.log('IndexedDB inicializada correctamente');
+    } catch (dbError) {
+      console.error('Error al inicializar IndexedDB:', dbError);
+      // Continuar con la inicialización aunque falle IndexedDB
+    }
+    
+    // Crear la instancia de Pinia y la aplicación
     const pinia = createPinia();
-
-    // Crear la aplicación
     const app = createApp(App);
-
-    // Instalar Pinia
+    
+    // Instalar Pinia y router
     app.use(pinia);
-
-    // Configurar el router
     app.use(router);
 
-    // Inicializar los stores después de que Pinia esté instalada
+    // Importar e inicializar los stores
     const { useAuthStore } = await import('./stores/auth.store');
     const { useProductStore } = await import('./stores/productStore');
-
     const authStore = useAuthStore();
     const productStore = useProductStore();
 
@@ -40,47 +75,39 @@ async function initializeApp() {
     console.log('Inicializando estado de autenticación...');
     await authStore.inicializarAuth();
 
-    // Inicializar el store de productos si el usuario está autenticado y no hay productos cargados
-    if (authStore.estaAutenticado && productStore.getProducts.length === 0) {
-      console.log('Usuario autenticado, inicializando store de productos...');
-      await productStore.initializeStore();
-    }
-
-    // Inicializar el servicio de sincronización
-    syncService;
-
-    // Registrar Service Worker
-    const updateSW = registerSW({
-      onNeedRefresh() {
-        console.log('Nueva versión disponible!');
-      },
-      onOfflineReady() {
-        console.log('App lista para uso offline!');
-      },
-      immediate: true
-    });
-
     // Montar la aplicación
     app.mount('#app');
     console.log('Aplicación montada correctamente');
 
-    // Manejar eventos de conexión
-    window.addEventListener('online', async () => {
-      console.log('Conexión recuperada');
-      if (authStore.estaAutenticado) {
-        await productStore.syncOfflineProducts();
-        authStore.setOfflineStatus(false);
+    // Configurar manejo de estado offline/online
+    const handleConnectionChange = async (isOnline) => {
+      console.log(`Conexión ${isOnline ? 'recuperada' : 'perdida'}`);
+      authStore.setOfflineStatus(!isOnline);
+      
+      if (isOnline && authStore.estaAutenticado) {
+        try {
+          await syncService.forceSyncNow();
+        } catch (error) {
+          console.error('Error al sincronizar después de recuperar conexión:', error);
+        }
       }
-    });
+    };
 
-    window.addEventListener('offline', () => {
-      console.log('Conexión perdida');
-      authStore.setOfflineStatus(true);
-    });
+    // Configurar listeners de conexión
+    window.addEventListener('online', () => handleConnectionChange(true));
+    window.addEventListener('offline', () => handleConnectionChange(false));
 
     // Establecer estado inicial de conexión
-    authStore.setOfflineStatus(!navigator.onLine);
-    console.log('Estado de conexión inicial:', navigator.onLine ? 'online' : 'offline');
+    handleConnectionChange(navigator.onLine);
+
+    // Inicializar productos si el usuario está autenticado
+    if (authStore.estaAutenticado) {
+      try {
+        await productStore.initializeStore();
+      } catch (error) {
+        console.error('Error al inicializar productos:', error);
+      }
+    }
 
   } catch (error) {
     console.error('Error al inicializar la aplicación:', error);
@@ -89,4 +116,6 @@ async function initializeApp() {
 
 // Iniciar la aplicación
 console.log('Iniciando proceso de inicialización...');
-initializeApp();
+initializeApp().catch(error => {
+  console.error('Error fatal durante la inicialización:', error);
+});

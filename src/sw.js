@@ -42,37 +42,22 @@ precacheAndRoute(self.__WB_MANIFEST)
 
 // Instalar Service Worker
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    Promise.all([
-      caches.open(STATIC_CACHE).then((cache) => {
-        return cache.addAll(PRECACHE_ASSETS);
-      }),
-      self.skipWaiting()
-    ])
-  );
-});
+  console.log('Service Worker instalado')
+  self.skipWaiting()
+})
 
 // Activar Service Worker
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    Promise.all([
-      self.clients.claim(),
-      caches.keys().then((cacheNames) => {
-        return Promise.all(
-          cacheNames
-            .filter((cacheName) => 
-              cacheName.startsWith('inventario-pwa-') && 
-              cacheName !== CACHE_NAME &&
-              cacheName !== STATIC_CACHE &&
-              cacheName !== API_CACHE &&
-              cacheName !== AUTH_CACHE
-            )
-            .map((cacheName) => caches.delete(cacheName))
-        );
-      })
-    ])
-  );
-});
+  console.log('Service Worker activado')
+  event.waitUntil(clients.claim())
+})
+
+// Manejo de mensajes
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
+})
 
 // Cache para recursos estáticos
 registerRoute(
@@ -134,7 +119,28 @@ registerRoute(
 // Manejar sincronización en segundo plano
 self.addEventListener('sync', (event) => {
   if (event.tag === 'sync-productos') {
-    event.waitUntil(syncData());
+    event.waitUntil(
+      caches.open('sync-queue').then((cache) => {
+        return cache.keys().then((requests) => {
+          return Promise.all(
+            requests.map((request) => {
+              return cache.match(request).then((response) => {
+                return response.json().then((data) => {
+                  return fetch(request.url, {
+                    method: request.method,
+                    body: JSON.stringify(data),
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': request.headers.get('Authorization')
+                    }
+                  }).then(() => cache.delete(request));
+                });
+              });
+            })
+          );
+        });
+      })
+    );
   }
 });
 
@@ -203,11 +209,31 @@ self.addEventListener('fetch', (event) => {
   if (event.request.url.includes('/login') || event.request.url.includes('/registro')) {
     event.respondWith(
       (async () => {
+        // Para peticiones POST, pasar directamente a la red
+        if (event.request.method === 'POST') {
+          try {
+            return await fetch(event.request);
+          } catch (error) {
+            return new Response(
+              JSON.stringify({
+                error: 'No se puede conectar al servidor',
+                offline: true,
+                timestamp: new Date().toISOString()
+              }),
+              {
+                status: 503,
+                headers: { 'Content-Type': 'application/json' }
+              }
+            );
+          }
+        }
+
+        // Para otras peticiones (GET), usar la estrategia NetworkFirst
         try {
-          const networkResponse = await fetch(event.request.clone());
+          const networkResponse = await fetch(event.request);
           if (networkResponse.ok) {
             const cache = await caches.open(AUTH_CACHE);
-            cache.put(event.request, networkResponse.clone());
+            await cache.put(event.request, networkResponse.clone());
             return networkResponse;
           }
           throw new Error('Network response was not ok');
@@ -219,7 +245,7 @@ self.addEventListener('fetch', (event) => {
           }
           return new Response(
             JSON.stringify({
-              error: 'No hay conexión a internet',
+              error: 'No hay conexión al servidor',
               offline: true,
               timestamp: new Date().toISOString()
             }),
@@ -238,11 +264,32 @@ self.addEventListener('fetch', (event) => {
   if (event.request.url.includes('/api/')) {
     event.respondWith(
       (async () => {
+        // Para peticiones POST, PUT, DELETE ir directamente a la red sin cachear
+        if (event.request.method !== 'GET') {
+          try {
+            const networkResponse = await fetch(event.request);
+            return networkResponse;
+          } catch (error) {
+            return new Response(
+              JSON.stringify({
+                error: 'No se puede conectar al servidor',
+                offline: true,
+                timestamp: new Date().toISOString()
+              }),
+              {
+                status: 503,
+                headers: { 'Content-Type': 'application/json' }
+              }
+            );
+          }
+        }
+
+        // Para peticiones GET usar NetworkFirst
         const cache = await caches.open(API_CACHE);
         try {
-          const networkResponse = await fetch(event.request.clone());
+          const networkResponse = await fetch(event.request);
           if (networkResponse.ok) {
-            cache.put(event.request, networkResponse.clone());
+            await cache.put(event.request, networkResponse.clone());
             return networkResponse;
           }
           throw new Error('Network response was not ok');
@@ -253,7 +300,7 @@ self.addEventListener('fetch', (event) => {
           }
           return new Response(
             JSON.stringify({
-              error: 'No hay conexión a internet',
+              error: 'No hay conexión al servidor',
               offline: true,
               timestamp: new Date().toISOString()
             }),

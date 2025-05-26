@@ -198,33 +198,40 @@ const handleSubmit = async () => {
   try {
     console.log('Enviando datos del formulario:', formData.value);
     
+    // Validar datos antes de enviar
+    if (!formData.value.nombre || formData.value.nombre.trim() === '') {
+      throw new Error('El nombre es requerido');
+    }
+    
+    if (isNaN(Number(formData.value.precio)) || Number(formData.value.precio) < 0) {
+      throw new Error('El precio debe ser un número válido y mayor o igual a 0');
+    }
+    
+    if (isNaN(Number(formData.value.stock)) || Number(formData.value.stock) < 0) {
+      throw new Error('El stock debe ser un número válido y mayor o igual a 0');
+    }
+
+    // Normalizar datos
+    const productoData = {
+      nombre: formData.value.nombre.trim(),
+      descripcion: (formData.value.descripcion || '').trim(),
+      precio: Number(formData.value.precio),
+      stock: Number(formData.value.stock),
+      imagen: formData.value.imagen || '',
+      activo: formData.value.activo
+    };
+
     if (props.editMode) {
       if (!props.product?.id) {
         throw new Error('No se puede actualizar el producto: ID no válido');
       }
       
-      const productoData = {
-        id: props.product.id,
-        nombre: formData.value.nombre,
-        descripcion: formData.value.descripcion,
-        precio: formData.value.precio,
-        stock: formData.value.stock,
-        imagen: formData.value.imagen,
-        activo: formData.value.activo
-      };
-
       console.log('Actualizando producto con datos:', productoData);
-      await productStore.updateProduct(productoData);
+      await productStore.updateProduct({
+        id: props.product.id,
+        ...productoData
+      });
     } else {
-      const productoData = {
-        nombre: formData.value.nombre,
-        descripcion: formData.value.descripcion,
-        precio: formData.value.precio,
-        stock: formData.value.stock,
-        imagen: formData.value.imagen,
-        activo: formData.value.activo
-      };
-
       console.log('Creando nuevo producto con datos:', productoData);
       await productStore.addProduct(productoData);
     }

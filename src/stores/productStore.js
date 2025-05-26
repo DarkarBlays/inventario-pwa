@@ -4,9 +4,12 @@ import {
   updateInIndexedDB,
   deleteFromIndexedDB,
   getAllFromIndexedDB,
-  clearIndexedDB
+  clearIndexedDB,
+  getDB,
+  getStore,
+  STORES
 } from '../services/indexedDB'
-import { apiService } from '../services/api.service'
+import { api } from '../services/api'
 
 export const useProductStore = defineStore('products', {
   state: () => ({
@@ -46,93 +49,89 @@ export const useProductStore = defineStore('products', {
     },
 
     handleConnectionChange() {
+      const wasOffline = !this.isOnline;
       this.isOnline = navigator.onLine;
       console.log('Estado de conexión:', this.isOnline ? 'online' : 'offline');
       
-      if (this.isOnline && this.offlineProducts.length > 0) {
-        console.log('Conexión restaurada, sincronizando productos pendientes...');
-        this.syncOfflineProducts();
+      if (this.isOnline && wasOffline) {
+        console.log('Conexión recuperada, verificando productos pendientes...');
+        if (this.offlineProducts.length > 0) {
+          console.log(`Encontrados ${this.offlineProducts.length} productos pendientes de sincronizar`);
+          this.syncOfflineProducts();
+        } else {
+          console.log('No hay productos pendientes de sincronizar');
+        }
       }
     },
 
     async loadFromIndexedDB() {
-      console.log('Cargando productos desde IndexedDB...');
-      const localProducts = await getAllFromIndexedDB();
-      console.log('Productos en IndexedDB:', localProducts);
-
-      this.products = localProducts.map(product => ({
-        id: product.id,
-        name: product.name || product.nombre || '',
-        description: product.description || product.descripcion || '',
-        price: product.price || product.precio || 0,
-        stock: product.stock || 0,
-        image: product.image || product.imagen || '',
-        enabled: typeof product.enabled !== 'undefined' ? product.enabled :
-          typeof product.activo !== 'undefined' ? product.activo : true
-      }));
+      try {
+        const products = await getAllFromIndexedDB();
+        this.products = products;
+        return products;
+      } catch (error) {
+        console.error('Error cargando productos desde IndexedDB:', error);
+        throw error;
+      }
     },
 
     async syncWithBackend() {
+      if (!navigator.onLine) return;
+
       try {
-        console.log('Sincronizando con el backend...');
-        const response = await apiService.get('/productos');
-
-        if (response.data && Array.isArray(response.data)) {
-          // Obtener productos actuales de IndexedDB
-          const localProducts = await getAllFromIndexedDB();
-          const localProductsMap = new Map(localProducts.map(p => [p.id, p]));
-          const backendIds = new Set();
-
-          console.log('Procesando productos del backend...');
-          
-          // Procesar productos del backend
-          for (const product of response.data) {
-            backendIds.add(product.id);
-            const normalizedProduct = {
-              id: product.id,
-              name: product.nombre || '',
-              description: product.descripcion || '',
-              price: Number(product.precio) || 0,
-              stock: Number(product.stock) || 0,
-              image: product.imagen || '',
-              enabled: product.activo ?? true
-            };
-
-            const localProduct = localProductsMap.get(product.id);
-            
-            // Si el producto local tiene cambios pendientes, no lo sobrescribimos
-            if (localProduct && this.offlineProducts.some(p => p.id === product.id)) {
-              console.log(`Producto ${product.id} tiene cambios pendientes, manteniendo versión local`);
-              continue;
-            }
-
-            // Actualizar o agregar el producto
-            await addToIndexedDB(normalizedProduct);
-          }
-
-          // Mantener productos locales que no existen en el backend
-          // (pueden ser productos nuevos creados offline)
-          for (const localProduct of localProducts) {
-            if (!backendIds.has(localProduct.id) && !localProduct.id.toString().startsWith('temp_')) {
-              console.log(`Eliminando producto local ${localProduct.id} que ya no existe en el backend`);
-              await deleteFromIndexedDB(localProduct.id);
-            }
-          }
-
-          // Actualizar el store
-          await this.loadFromIndexedDB();
-          
-          this.lastSync = new Date().toISOString();
-          this.syncStatus = 'synced';
-          
-          console.log('Sincronización completada exitosamente');
+        const response = await api.get('/productos');
+        if (!response || !Array.isArray(response)) {
+          throw new Error('Respuesta inválida del servidor');
         }
+        
+        // Normalizar los productos del servidor
+        const normalizedProducts = response.map(product => ({
+          id: product.id,
+          name: product.nombre || '',
+          description: product.descripcion || '',
+          price: Number(product.precio) || 0,
+          stock: Number(product.stock) || 0,
+          image: product.imagen || '',
+          enabled: product.activo !== undefined ? product.activo : true,
+          syncStatus: product.estado_sincronizacion || 'synced',
+          timestamp: new Date().toISOString()
+        }));
+
+        // Actualizar IndexedDB solo si hay cambios
+        const currentProducts = await getAllFromIndexedDB();
+        const hasChanges = this.hasProductChanges(currentProducts, normalizedProducts);
+        
+        if (hasChanges) {
+          await clearIndexedDB();
+          for (const product of normalizedProducts) {
+            await addToIndexedDB(product);
+          }
+        }
+        
+        this.products = normalizedProducts;
+        this.lastSync = new Date().toISOString();
+        this.syncStatus = 'synced';
       } catch (error) {
-        console.error('Error al sincronizar con el backend:', error);
-        this.syncStatus = 'pending';
-        // Si hay error, mantener los datos locales
-        await this.loadFromIndexedDB();
+        console.error('Error sincronizando con backend:', error);
+        throw error;
       }
+    },
+
+    hasProductChanges(currentProducts, newProducts) {
+      if (currentProducts.length !== newProducts.length) return true;
+      
+      const compareProducts = (a, b) => {
+        return a.id === b.id &&
+               a.name === b.name &&
+               a.description === b.description &&
+               a.price === b.price &&
+               a.stock === b.stock &&
+               a.enabled === b.enabled;
+      };
+
+      return !currentProducts.every(current => 
+        newProducts.some(newProd => compareProducts(current, newProd))
+      );
     },
 
     isTemporaryId(id) {
@@ -176,81 +175,118 @@ export const useProductStore = defineStore('products', {
       });
     },
 
+    generateTempId() {
+      return `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    },
+
+    async verifyTempId(tempId) {
+      try {
+        const store = await getStore(STORES.PRODUCTS, 'readonly');
+        return new Promise((resolve, reject) => {
+          const request = store.get(tempId);
+          request.onsuccess = () => {
+            console.log('Verificación de ID temporal:', tempId, request.result ? 'existe' : 'no existe');
+            resolve(request.result);
+          };
+          request.onerror = () => {
+            console.error('Error al verificar ID temporal:', request.error);
+            reject(request.error);
+          };
+        });
+      } catch (error) {
+        console.error('Error verificando ID temporal:', error);
+        return null;
+      }
+    },
+
     async addProduct(product) {
       try {
-        this.loading = true;
-        console.log('Agregando nuevo producto:', product);
+        // Normalizar el producto para el backend
+        const backendProduct = {
+          nombre: product.nombre || product.name || '',
+          descripcion: product.descripcion || product.description || '',
+          precio: Number(product.precio || product.price) || 0,
+          stock: Number(product.stock) || 0,
+          imagen: product.imagen || product.image || '',
+          activo: product.activo !== undefined ? product.activo : true
+        };
 
-        // Comprimir imagen si existe
-        if (product.imagen) {
-          product.imagen = await this.compressImage(product.imagen);
-        }
-
-        if (this.isOnline) {
-          try {
-            // Convertir a formato del backend
-            const backendProduct = {
-              nombre: product.nombre || '',
-              descripcion: product.descripcion || '',
-              precio: Number(product.precio) || 0,
-              stock: Number(product.stock) || 0,
-              imagen: product.imagen || '',
-              activo: product.activo ?? true
-            };
-
-            console.log('Intentando guardar en el backend...');
-            const response = await apiService.post('/productos', backendProduct);
-
-            if (response && response.data && response.data.producto) {
-              console.log('Producto guardado en el backend:', response.data);
-              // Crear producto con el ID del backend
-              const newProduct = {
-                id: response.data.producto.id,
-                name: response.data.producto.nombre,
-                description: response.data.producto.descripcion,
-                price: response.data.producto.precio,
-                stock: response.data.producto.stock,
-                image: response.data.producto.imagen || '',
-                enabled: response.data.producto.activo
-              };
-              
-              // Guardar en IndexedDB y actualizar el store
-              await addToIndexedDB(newProduct);
-              this.products.push(newProduct);
-              this.syncStatus = 'synced';
-              return newProduct;
-            } else {
-              throw new Error('Respuesta inválida del servidor');
-            }
-          } catch (error) {
-            console.error('Error al guardar en el backend:', error);
-            throw error;
+        if (!navigator.onLine) {
+          console.log('Modo offline: Guardando producto localmente');
+          
+          // Crear un ID temporal único
+          const tempId = this.generateTempId();
+          console.log('ID temporal generado:', tempId);
+          
+          // Verificar que el ID temporal no exista ya
+          const existingProduct = await this.verifyTempId(tempId);
+          
+          if (existingProduct) {
+            console.log('ID temporal ya existe, generando uno nuevo');
+            return this.addProduct(product); // Reintentar con un nuevo ID
           }
-        } else {
-          // Modo offline: usar ID temporal
-          const newProduct = {
-            id: `temp_${Date.now()}`,
-            name: product.nombre || '',
-            description: product.descripcion || '',
-            price: Number(product.precio) || 0,
-            stock: Number(product.stock) || 0,
-            image: product.imagen || '',
-            enabled: product.activo ?? true,
-            pendingSync: true
+          
+          // Crear producto offline
+          const offlineProduct = {
+            id: tempId,
+            name: backendProduct.nombre,
+            description: backendProduct.descripcion,
+            price: backendProduct.precio,
+            stock: backendProduct.stock,
+            image: backendProduct.imagen,
+            enabled: backendProduct.activo,
+            syncStatus: 'pending',
+            timestamp: new Date().toISOString()
           };
-
-          await addToIndexedDB(newProduct);
-          this.products.push(newProduct);
-          this.offlineProducts.push({ ...newProduct, action: 'add' });
+          
+          console.log('Guardando producto offline:', offlineProduct);
+          
+          // Guardar en IndexedDB
+          await addToIndexedDB(offlineProduct);
+          
+          // Agregar a la lista de productos
+          this.products.push(offlineProduct);
+          
+          // Agregar a la cola de sincronización
+          this.offlineProducts.push({
+            ...offlineProduct,
+            action: 'add'
+          });
+          
           this.syncStatus = 'pending';
-          return newProduct;
+          return offlineProduct;
         }
+
+        // Si estamos online, enviar al backend
+        console.log('Modo online: Enviando producto al servidor');
+        const response = await api.post('/productos', backendProduct);
+        
+        if (!response || !response.producto) {
+          throw new Error('Error al crear el producto en el servidor');
+        }
+
+        // Normalizar la respuesta del servidor
+        const serverProduct = {
+          id: response.producto.id,
+          name: response.producto.nombre,
+          description: response.producto.descripcion,
+          price: Number(response.producto.precio),
+          stock: Number(response.producto.stock),
+          image: response.producto.imagen,
+          enabled: response.producto.activo,
+          syncStatus: 'synced',
+          timestamp: new Date().toISOString()
+        };
+
+        // Guardar en IndexedDB y actualizar el store
+        await addToIndexedDB(serverProduct);
+        this.products.push(serverProduct);
+        this.syncStatus = 'synced';
+        return serverProduct;
       } catch (error) {
-        console.error('Error al agregar producto:', error);
+        console.error('Error en addProduct:', error);
         this.error = error.message;
         throw error;
-      } finally {
-        this.loading = false;
       }
     },
 
@@ -268,7 +304,7 @@ export const useProductStore = defineStore('products', {
           activo: product.enabled
         };
 
-        const response = await apiService.post('/productos', backendProduct);
+        const response = await api.post('/productos', backendProduct);
         if (response && response.data) {
           const index = this.offlineProducts.findIndex(p => p.id === product.id);
           if (index !== -1) {
@@ -311,69 +347,58 @@ export const useProductStore = defineStore('products', {
             imagen: product.imagen || product.image || ''
           };
 
-          let updatedProduct;
+          let response;
           
           if (needsCreation) {
             // Si necesita creación, crear un nuevo producto
             console.log('Creando nuevo producto para ID:', product.id);
-            const response = await apiService.post('/productos', backendProduct);
-            
-            if (response && response.data) {
-              const serverProduct = response.data.producto || response.data;
-              updatedProduct = {
-                id: serverProduct.id || response.data.id,
-                name: backendProduct.nombre,
-                description: backendProduct.descripcion,
-                price: backendProduct.precio,
-                stock: backendProduct.stock,
-                image: backendProduct.imagen || '',
-                enabled: backendProduct.activo,
-                pendingSync: false
-              };
-              
-              // Eliminar el producto temporal
-              await deleteFromIndexedDB(product.id);
-              const index = this.products.findIndex(p => p.id === product.id);
-              if (index !== -1) {
-                this.products.splice(index, 1);
-              }
-            } else {
-              throw new Error('Error al crear el producto en el servidor');
-            }
+            response = await api.post('/productos', backendProduct);
           } else {
             // Si no necesita creación, actualizar normalmente
             console.log('Actualizando producto existente:', product.id);
-            const response = await apiService.put(`/productos/${product.id}`, backendProduct);
-            
-            if (response && response.data) {
-              updatedProduct = {
-                id: product.id,
-                name: backendProduct.nombre,
-                description: backendProduct.descripcion,
-                price: backendProduct.precio,
-                stock: backendProduct.stock,
-                image: backendProduct.imagen,
-                enabled: backendProduct.activo,
-                pendingSync: false
-              };
-            } else {
-              throw new Error('Error al actualizar el producto');
+            response = await api.put(`/productos/${product.id}`, backendProduct);
+          }
+
+          if (!response || !response.producto) {
+            throw new Error('Error al actualizar el producto');
+          }
+
+          // Convertir la respuesta del servidor al formato local
+          const updatedProduct = {
+            id: response.producto.id,
+            name: response.producto.nombre,
+            description: response.producto.descripcion,
+            price: Number(response.producto.precio),
+            stock: Number(response.producto.stock),
+            image: response.producto.imagen,
+            enabled: response.producto.activo,
+            syncStatus: response.producto.estado_sincronizacion || 'synced',
+            timestamp: new Date().toISOString()
+          };
+
+          // Si era un producto temporal, eliminar el antiguo
+          if (needsCreation) {
+            await deleteFromIndexedDB(product.id);
+            const index = this.products.findIndex(p => p.id === product.id);
+            if (index !== -1) {
+              this.products.splice(index, 1);
             }
           }
 
           // Actualizar IndexedDB y store
           await updateInIndexedDB(updatedProduct);
-          const index = this.products.findIndex(p => p.id === (needsCreation ? product.id : updatedProduct.id));
+          const index = this.products.findIndex(p => p.id === updatedProduct.id);
           if (index !== -1) {
             this.products[index] = updatedProduct;
           } else {
             this.products.push(updatedProduct);
           }
+
           this.syncStatus = 'synced';
           return updatedProduct;
         } else {
           // Modo offline
-          const normalizedProduct = {
+          const offlineProduct = {
             id: product.id,
             name: product.nombre || product.name || '',
             description: product.descripcion || product.description || '',
@@ -382,17 +407,18 @@ export const useProductStore = defineStore('products', {
             image: product.imagen || product.image || '',
             enabled: typeof product.activo !== 'undefined' ? product.activo : 
                      typeof product.enabled !== 'undefined' ? product.enabled : true,
-            pendingSync: true
+            syncStatus: 'pending',
+            timestamp: new Date().toISOString()
           };
 
-          await updateInIndexedDB(normalizedProduct);
-          const index = this.products.findIndex(p => p.id === normalizedProduct.id);
+          await updateInIndexedDB(offlineProduct);
+          const index = this.products.findIndex(p => p.id === offlineProduct.id);
           if (index !== -1) {
-            this.products[index] = normalizedProduct;
+            this.products[index] = offlineProduct;
           }
-          this.offlineProducts.push({ ...normalizedProduct, action: 'update' });
+          this.offlineProducts.push({ ...offlineProduct, action: 'update' });
           this.syncStatus = 'pending';
-          return normalizedProduct;
+          return offlineProduct;
         }
       } catch (error) {
         console.error('Error al actualizar producto:', error);
@@ -413,7 +439,7 @@ export const useProductStore = defineStore('products', {
 
         if (navigator.onLine) {
           try {
-            await apiService.delete(`/productos/${productId}`);
+            await api.delete(`/productos/${productId}`);
             this.syncStatus = 'synced';
           } catch (error) {
             console.error('Error al eliminar en el backend:', error);
@@ -433,55 +459,137 @@ export const useProductStore = defineStore('products', {
     },
 
     async syncOfflineProducts() {
-      if (!navigator.onLine || this.offlineProducts.length === 0) return;
+      if (!this.isOnline || this.offlineProducts.length === 0) return;
 
-      try {
-        this.loading = true;
-        console.log('Sincronizando productos offline:', this.offlineProducts);
+      console.log('Iniciando sincronización de productos offline:', this.offlineProducts);
+      
+      // Crear una copia de los productos a sincronizar
+      const productsToSync = [...this.offlineProducts];
+      // Limpiar la cola de productos offline antes de empezar
+      this.offlineProducts = [];
+      
+      for (const product of productsToSync) {
+        try {
+          console.log('Sincronizando producto:', product);
 
-        for (const product of this.offlineProducts) {
-          try {
-            switch (product.action) {
-              case 'add':
-                await apiService.post('/productos', {
-                  nombre: product.name,
-                  descripcion: product.description,
-                  precio: product.price,
-                  stock: product.stock,
-                  imagen: product.image,
-                  activo: product.enabled
-                });
-                break;
-              case 'update':
-                await apiService.put(`/productos/${product.id}`, {
-                  nombre: product.name,
-                  descripcion: product.description,
-                  precio: product.price,
-                  stock: product.stock,
-                  imagen: product.image,
-                  activo: product.enabled
-                });
-                break;
-              case 'delete':
-                await apiService.delete(`/productos/${product.id}`);
-                break;
-            }
-          } catch (error) {
-            console.error(`Error al sincronizar operación ${product.action}:`, error);
+          // Convertir al formato del backend
+          const backendProduct = {
+            nombre: product.name,
+            descripcion: product.description,
+            precio: Number(product.price),
+            stock: Number(product.stock),
+            imagen: product.image,
+            activo: product.enabled
+          };
+
+          let response;
+          
+          switch (product.action) {
+            case 'add':
+              console.log('Creando producto en el servidor:', backendProduct);
+              response = await api.post('/productos', backendProduct);
+              if (response && response.producto) {
+                // Primero eliminar el producto temporal de IndexedDB y del store
+                console.log('Eliminando producto temporal:', product.id);
+                await deleteFromIndexedDB(product.id);
+                this.products = this.products.filter(p => p.id !== product.id);
+                
+                // Luego agregar el nuevo producto con ID del servidor
+                const serverProduct = {
+                  id: response.producto.id,
+                  name: response.producto.nombre,
+                  description: response.producto.descripcion,
+                  price: Number(response.producto.precio),
+                  stock: Number(response.producto.stock),
+                  image: response.producto.imagen,
+                  enabled: response.producto.activo,
+                  syncStatus: 'synced',
+                  timestamp: new Date().toISOString()
+                };
+                
+                console.log('Agregando producto sincronizado:', serverProduct);
+                await addToIndexedDB(serverProduct);
+                this.products.push(serverProduct);
+                console.log('Producto sincronizado exitosamente:', product.id);
+              }
+              break;
+
+            case 'update':
+              console.log('Actualizando producto en el servidor:', product.id, backendProduct);
+              response = await api.put(`/productos/${product.id}`, backendProduct);
+              if (response && response.producto) {
+                const updatedProduct = {
+                  id: response.producto.id,
+                  name: response.producto.nombre,
+                  description: response.producto.descripcion,
+                  price: Number(response.producto.precio),
+                  stock: Number(response.producto.stock),
+                  image: response.producto.imagen,
+                  enabled: response.producto.activo,
+                  syncStatus: 'synced',
+                  timestamp: new Date().toISOString()
+                };
+                
+                await updateInIndexedDB(updatedProduct);
+                const index = this.products.findIndex(p => p.id === updatedProduct.id);
+                if (index !== -1) {
+                  this.products[index] = updatedProduct;
+                }
+              }
+              break;
+
+            case 'delete':
+              console.log('Eliminando producto en el servidor:', product.id);
+              await api.delete(`/productos/${product.id}`);
+              await deleteFromIndexedDB(product.id);
+              this.products = this.products.filter(p => p.id !== product.id);
+              break;
           }
+          
+        } catch (error) {
+          console.error(`Error sincronizando producto ${product.id}:`, error);
+          // Si hay un error, volver a agregar el producto a la cola offline
+          this.offlineProducts.push(product);
         }
+      }
 
-        // Limpiar cola de operaciones pendientes
-        this.offlineProducts = [];
+      // Actualizar estado de sincronización
+      if (this.offlineProducts.length === 0) {
         this.syncStatus = 'synced';
-
-        // Actualizar datos desde el backend
-        await this.syncWithBackend();
-      } catch (error) {
-        console.error('Error al sincronizar productos:', error);
-        this.error = error.message;
-      } finally {
-        this.loading = false;
+        console.log('Sincronización completada exitosamente');
+        
+        // Recargar todos los productos desde el servidor
+        try {
+          const response = await api.get('/productos');
+          if (response && Array.isArray(response)) {
+            // Limpiar IndexedDB
+            await clearIndexedDB();
+            
+            // Actualizar con los datos del servidor
+            const serverProducts = response.map(producto => ({
+              id: producto.id,
+              name: producto.nombre,
+              description: producto.descripcion,
+              price: Number(producto.precio),
+              stock: Number(producto.stock),
+              image: producto.imagen,
+              enabled: producto.activo,
+              syncStatus: 'synced',
+              timestamp: new Date().toISOString()
+            }));
+            
+            // Actualizar IndexedDB y store
+            for (const product of serverProducts) {
+              await addToIndexedDB(product);
+            }
+            this.products = serverProducts;
+          }
+        } catch (error) {
+          console.error('Error al recargar productos del servidor:', error);
+        }
+      } else {
+        this.syncStatus = 'pending';
+        console.log('Quedan productos pendientes de sincronizar:', this.offlineProducts);
       }
     }
   },
