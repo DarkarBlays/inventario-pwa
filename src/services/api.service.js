@@ -3,6 +3,7 @@ const API_BASE_URL = 'http://localhost:3000/api';
 class ApiService {
     constructor() {
         this.baseURL = API_BASE_URL;
+        this.token = localStorage.getItem('token');
         this.headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
@@ -10,24 +11,34 @@ class ApiService {
     }
 
     getHeaders() {
-        const token = localStorage.getItem('token');
-        return {
-            ...this.headers,
-            'Authorization': token ? `Bearer ${token}` : ''
+        const headers = {
+            'Content-Type': 'application/json'
         };
+        if (this.token) {
+            headers['Authorization'] = `Bearer ${this.token}`;
+        }
+        return headers;
     }
 
     async handleResponse(response) {
         if (!response.ok) {
-            if (response.status === 401 || response.status === 403) {
-                localStorage.removeItem('token');
-                localStorage.removeItem('usuario');
-                window.location.href = '/login';
-            }
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.mensaje || `HTTP error! status: ${response.status}`);
         }
-        const data = await response.json();
-        return { data, status: response.status };
+        return response.json();
+    }
+
+    async checkConnection() {
+        try {
+            const response = await fetch(`${this.baseURL}/estado`, {
+                method: 'GET',
+                headers: this.getHeaders()
+            });
+            return response.ok;
+        } catch (error) {
+            console.error('Error de conexión:', error);
+            return false;
+        }
     }
 
     async get(url, config = {}) {
@@ -51,14 +62,29 @@ class ApiService {
 
     async post(url, data = {}, config = {}) {
         try {
+            if (!navigator.onLine) {
+                throw new Error('No hay conexión a internet');
+            }
+
+            // Verificar conexión con el backend
+            const isConnected = await this.checkConnection();
+            if (!isConnected) {
+                throw new Error('No se puede conectar con el servidor');
+            }
+
+            console.log('Enviando POST a:', `${this.baseURL}${url}`);
+            console.log('Datos:', data);
+
             const response = await fetch(`${this.baseURL}${url}`, {
                 method: 'POST',
                 headers: this.getHeaders(),
                 body: JSON.stringify(data),
                 ...config
             });
+
             return this.handleResponse(response);
         } catch (error) {
+            console.error('Error en POST:', error);
             if (!navigator.onLine) {
                 await this.saveForSync('POST', url, data);
             }
