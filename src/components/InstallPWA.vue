@@ -2,13 +2,13 @@
   <div v-if="showInstallButton" class="fixed bottom-4 right-4 z-50">
     <button
       @click="installPWA"
-      class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-indigo-700 flex items-center space-x-2 transition-all duration-300 transform hover:scale-105"
+      class="bg-indigo-600 text-white transition-all duration-300 hover:bg-indigo-700 flex items-center justify-center shadow-lg md:space-x-2 md:px-4 md:py-2 md:rounded-lg md:hover:scale-105 w-12 h-12 rounded-full md:w-auto md:h-auto"
     >
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 md:h-5 md:w-5" viewBox="0 0 20 20" fill="currentColor">
         <path d="M10 2a1 1 0 011 1v6.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 111.414-1.414L9 9.586V3a1 1 0 011-1z"/>
         <path d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z"/>
       </svg>
-      <span>{{ installButtonText }}</span>
+      <span class="hidden md:inline">{{ installButtonText }}</span>
     </button>
   </div>
 </template>
