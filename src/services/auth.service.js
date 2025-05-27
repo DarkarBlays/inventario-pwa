@@ -1,7 +1,9 @@
 import { api } from './api';
-import { saveAuthData, clearAuthData, getDB, STORES, initDB } from './indexedDB';
+import { saveAuthData, clearAuthData, getDB, STORES, initDB, resetDatabase } from './indexedDB';
 
 const OFFLINE_CREDENTIALS_KEY = 'offline_credentials';
+const TOKEN_KEY = import.meta.env.VITE_TOKEN_KEY;
+const USER_KEY = import.meta.env.VITE_USER_KEY;
 
 const comparePasswords = async (inputPassword, storedPassword) => {
     try {
@@ -16,8 +18,16 @@ const comparePasswords = async (inputPassword, storedPassword) => {
 
 const getAuthData = async () => {
     try {
-        await initDB(); // Aseguramos que la DB está inicializada
+        await initDB();
         const db = getDB();
+        
+        // Verificar si el store AUTH existe
+        if (!db.objectStoreNames.contains(STORES.AUTH)) {
+            console.log('Store AUTH no encontrado, reiniciando base de datos...');
+            await resetDatabase();
+            return null;
+        }
+
         return new Promise((resolve, reject) => {
             const transaction = db.transaction([STORES.AUTH], 'readonly');
             const store = transaction.objectStore(STORES.AUTH);
@@ -34,6 +44,12 @@ const getAuthData = async () => {
         });
     } catch (error) {
         console.error('Error al obtener datos de autenticación:', error);
+        // Si hay un error crítico, intentamos reiniciar la base de datos
+        try {
+            await resetDatabase();
+        } catch (resetError) {
+            console.error('Error al reiniciar la base de datos:', resetError);
+        }
         return null;
     }
 };
@@ -72,8 +88,8 @@ export const authService = {
                     await Promise.all([
                         saveAuthData(authData),
                         localStorage.setItem(OFFLINE_CREDENTIALS_KEY, JSON.stringify(authData)),
-                        localStorage.setItem('token', response.token),
-                        localStorage.setItem('usuario', JSON.stringify(response.usuario))
+                        localStorage.setItem(TOKEN_KEY, response.token),
+                        localStorage.setItem(USER_KEY, JSON.stringify(response.usuario))
                     ]);
 
                     console.log('Login online exitoso');
@@ -111,8 +127,8 @@ export const authService = {
             }
 
             // Actualizar localStorage para mantener consistencia
-            localStorage.setItem('token', storedAuthData.token);
-            localStorage.setItem('usuario', JSON.stringify(storedAuthData.usuario));
+            localStorage.setItem(TOKEN_KEY, storedAuthData.token);
+            localStorage.setItem(USER_KEY, JSON.stringify(storedAuthData.usuario));
 
             console.log('Login offline exitoso');
             return {
@@ -169,21 +185,13 @@ export const authService = {
 
     async cerrarSesion() {
         try {
-            if (navigator.onLine) {
-                try {
-                    const token = localStorage.getItem('token');
-                    if (token) {
-                        await api.post('/usuarios/logout');
-                    }
-                } catch (error) {
-                    console.error('Error al cerrar sesión en el servidor:', error);
-                }
-            }
-            
+            // Limpiar datos locales
             await clearAuthData();
-            localStorage.removeItem('token');
-            localStorage.removeItem('usuario');
+            localStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(USER_KEY);
             localStorage.removeItem(OFFLINE_CREDENTIALS_KEY);
+            
+            return true;
         } catch (error) {
             console.error('Error al cerrar sesión:', error);
             throw error;
@@ -196,7 +204,7 @@ export const authService = {
             if (authData) {
                 return authData.usuario;
             }
-            const usuario = localStorage.getItem('usuario');
+            const usuario = localStorage.getItem(USER_KEY);
             return usuario ? JSON.parse(usuario) : null;
         } catch (error) {
             console.error('Error al obtener usuario actual:', error);
@@ -207,7 +215,7 @@ export const authService = {
     async estaAutenticado() {
         try {
             const authData = await getAuthData();
-            return !!authData || !!localStorage.getItem('token');
+            return !!authData || !!localStorage.getItem(TOKEN_KEY);
         } catch (error) {
             console.error('Error al verificar autenticación:', error);
             return false;
@@ -235,8 +243,8 @@ export const authService = {
                     
                     await saveAuthData(newAuthData);
                     localStorage.setItem(OFFLINE_CREDENTIALS_KEY, JSON.stringify(newAuthData));
-                    localStorage.setItem('token', response.token);
-                    localStorage.setItem('usuario', JSON.stringify(response.usuario));
+                    localStorage.setItem(TOKEN_KEY, response.token);
+                    localStorage.setItem(USER_KEY, JSON.stringify(response.usuario));
                 }
             }
         } catch (error) {
@@ -245,8 +253,8 @@ export const authService = {
     },
 
     async logout() {
-        localStorage.removeItem('token');
-        localStorage.removeItem('usuario');
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
         
         // Limpiar datos de autenticación en IndexedDB
         const db = getDB();
@@ -256,7 +264,7 @@ export const authService = {
     },
 
     isAuthenticated() {
-        return !!localStorage.getItem('token');
+        return !!localStorage.getItem(TOKEN_KEY);
     }
 };
 

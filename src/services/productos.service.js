@@ -2,6 +2,8 @@ import { api } from './api';
 
 const STORE_NAME = 'productos-offline';
 const SYNC_QUEUE = 'sync-queue';
+const MAX_IMAGE_SIZE = import.meta.env.VITE_MAX_IMAGE_SIZE;
+const IMAGE_QUALITY = parseFloat(import.meta.env.VITE_IMAGE_QUALITY);
 
 export const productosService = {
     async obtenerTodos() {
@@ -176,4 +178,30 @@ export const productosService = {
             await this.guardarProductosOffline(productos);
         }
     }
+};
+
+export const procesarImagen = async (file) => {
+    if (file.size > MAX_IMAGE_SIZE) {
+        throw new Error(`La imagen es demasiado grande. Máximo ${MAX_IMAGE_SIZE / 1024 / 1024}MB`);
+    }
+    
+    // Resto del código de procesamiento de imagen
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                resolve(canvas.toDataURL('image/jpeg', IMAGE_QUALITY));
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
 }; 

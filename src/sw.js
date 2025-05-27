@@ -5,16 +5,16 @@ import { CacheableResponsePlugin } from 'workbox-cacheable-response'
 import { ExpirationPlugin } from 'workbox-expiration'
 import { BackgroundSyncPlugin } from 'workbox-background-sync';
 
-// Nombre del caché
-const CACHE_NAME = 'inventario-pwa-v1';
+// Configuración de caché
+const CACHE_NAME = `${import.meta.env.VITE_APP_NAME}-v${import.meta.env.VITE_CACHE_VERSION}`;
 const OFFLINE_URL = '/offline.html';
-const API_CACHE = 'api-cache';
-const STATIC_CACHE = 'static-cache';
-const AUTH_CACHE = 'auth-cache';
-const QUEUE_NAME = 'syncQueue';
+const API_CACHE = import.meta.env.VITE_API_CACHE_NAME;
+const STATIC_CACHE = import.meta.env.VITE_STATIC_CACHE_NAME;
+const AUTH_CACHE = import.meta.env.VITE_AUTH_CACHE_NAME;
+const SYNC_TASK_NAME = import.meta.env.VITE_SYNC_TASK_NAME;
 
 // Crear plugin de sincronización en segundo plano
-const backgroundSyncPlugin = new BackgroundSyncPlugin(QUEUE_NAME, {
+const backgroundSyncPlugin = new BackgroundSyncPlugin(SYNC_TASK_NAME, {
   maxRetentionTime: 24 * 60 // Retener por 24 horas
 });
 
@@ -27,11 +27,8 @@ const PRECACHE_ASSETS = [
   '/favicon.ico',
   '/src/assets/css/main.css',
   '/src/assets/logo.png',
-  '/pwa-64x64.png',
   '/pwa-192x192.png',
-  '/pwa-384x384.png',
-  '/pwa-512x512.png',
-  '/screenshot1.png'
+  '/pwa-512x512.png'
 ];
 
 // Limpiar cachés antiguos

@@ -19,60 +19,15 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
-    },
-    {
-      "src": "/pwa-64x64.png",
-      "sizes": "64x64",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/pwa-384x384.png",
-      "sizes": "384x384",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
-  ],
-  "screenshots": [
-    {
-      "src": "/screenshot1.png",
-      "sizes": "1280x720",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "Pantalla de inventario"
-    },
-    {
-      "src": "/screenshot-mobile.png",
-      "sizes": "750x1334",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Vista móvil del inventario"
     }
   ],
   "categories": ["business", "productivity"],
   "prefer_related_applications": false,
   "shortcuts": [
     {
-      "name": "Agregar Producto",
-      "url": "/inventory?action=add",
-      "description": "Agregar un nuevo producto al inventario",
-      "icons": [
-        {
-          "src": "/add-product-96x96.png",
-          "sizes": "96x96"
-        }
-      ]
-    },
-    {
       "name": "Ver Inventario",
       "url": "/inventory",
-      "description": "Ver lista de productos en inventario",
-      "icons": [
-        {
-          "src": "/list-96x96.png",
-          "sizes": "96x96"
-        }
-      ]
+      "description": "Ver lista de productos en inventario"
     }
   ],
   "id": "inventario-pwa-v1",

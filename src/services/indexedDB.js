@@ -4,23 +4,15 @@ export const STORES = {
   AUTH: 'auth'
 };
 
-const DB_NAME = 'inventario-pwa';
-const DB_VERSION = 3; // Incrementamos la versión para forzar la actualización
+const DB_NAME = import.meta.env.VITE_DB_NAME || 'inventario_db';
+const DB_VERSION = 1; // Mantenemos la versión 1 pero nos aseguramos de crear todos los stores
 
 let db = null;
 
 export const initDB = async () => {
   return new Promise((resolve, reject) => {
-    // Primero, verificamos la versión actual
-    const checkRequest = indexedDB.open(DB_NAME);
-    
-    checkRequest.onsuccess = (event) => {
-      const existingDB = event.target.result;
-      const currentVersion = existingDB.version;
-      existingDB.close();
-
-      console.log('Versión actual de IndexedDB:', currentVersion);
-      const request = indexedDB.open(DB_NAME, Math.max(DB_VERSION, currentVersion));
+    try {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onerror = (event) => {
         console.error('Error al abrir IndexedDB:', event.target.error);
@@ -34,50 +26,31 @@ export const initDB = async () => {
       };
 
       request.onupgradeneeded = (event) => {
-        console.log('Actualizando estructura de IndexedDB a versión:', event.newVersion);
+        console.log('Creando/actualizando estructura de IndexedDB...');
         const db = event.target.result;
-        const oldVersion = event.oldVersion;
 
-        // Si es una nueva base de datos (oldVersion es 0)
-        if (oldVersion < 1) {
-          console.log('Creando estructura inicial...');
-          if (!db.objectStoreNames.contains(STORES.PRODUCTS)) {
-            const productStore = db.createObjectStore(STORES.PRODUCTS, { keyPath: 'id' });
-            productStore.createIndex('name', 'name', { unique: false });
-          }
+        // Crear store de productos si no existe
+        if (!db.objectStoreNames.contains(STORES.PRODUCTS)) {
+          console.log('Creando store de productos...');
+          const productStore = db.createObjectStore(STORES.PRODUCTS, { keyPath: 'id' });
+          productStore.createIndex('name', 'name', { unique: false });
+          productStore.createIndex('enabled', 'enabled', { unique: false });
         }
 
-        // Actualizaciones para la versión 2
-        if (oldVersion < 2) {
-          console.log('Aplicando actualizaciones de la versión 2...');
-          if (db.objectStoreNames.contains(STORES.PRODUCTS)) {
-            const productStore = event.target.transaction.objectStore(STORES.PRODUCTS);
-            if (!productStore.indexNames.contains('enabled')) {
-              productStore.createIndex('enabled', 'enabled', { unique: false });
-            }
-          }
-        }
-
-        // Actualizaciones para la versión 3
-        if (oldVersion < 3) {
-          console.log('Aplicando actualizaciones de la versión 3...');
-          // Eliminar y recrear el store AUTH con la configuración correcta
-          if (db.objectStoreNames.contains(STORES.AUTH)) {
-            db.deleteObjectStore(STORES.AUTH);
-          }
+        // Crear store de autenticación si no existe
+        if (!db.objectStoreNames.contains(STORES.AUTH)) {
+          console.log('Creando store de autenticación...');
           const authStore = db.createObjectStore(STORES.AUTH, { keyPath: 'email' });
           authStore.createIndex('email', 'email', { unique: true });
           authStore.createIndex('timestamp', 'timestamp', { unique: false });
         }
 
-        console.log('Actualización de estructura completada');
+        console.log('Estructura de IndexedDB creada correctamente');
       };
-    };
-
-    checkRequest.onerror = (event) => {
-      console.error('Error al verificar la versión de IndexedDB:', event.target.error);
-      reject(event.target.error);
-    };
+    } catch (error) {
+      console.error('Error en initDB:', error);
+      reject(error);
+    }
   });
 };
 
@@ -104,6 +77,27 @@ export const getStore = async (storeName, mode = 'readonly') => {
     console.error(`Error al obtener store '${storeName}':`, error);
     throw error;
   }
+};
+
+// Función para eliminar la base de datos y reinicializarla
+export const resetDatabase = async () => {
+  return new Promise((resolve, reject) => {
+    const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
+    
+    deleteRequest.onsuccess = async () => {
+      console.log('Base de datos eliminada correctamente');
+      try {
+        await initDB();
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    };
+    
+    deleteRequest.onerror = () => {
+      reject(new Error('Error al eliminar la base de datos'));
+    };
+  });
 };
 
 export const addToIndexedDB = async (product) => {
@@ -211,65 +205,56 @@ export const clearIndexedDB = async () => {
   }
 };
 
-// Guardar datos de autenticación
+// Función para guardar datos de autenticación
 export const saveAuthData = async (authData) => {
-    try {
-        console.log('Guardando datos de autenticación en IndexedDB:', { ...authData, password: '***' });
-        const store = await getStore(STORES.AUTH, 'readwrite');
-        
-        // Limpiar datos anteriores
-        await new Promise((resolve, reject) => {
-            const clearRequest = store.clear();
-            clearRequest.onsuccess = resolve;
-            clearRequest.onerror = reject;
-        });
-
-        return new Promise((resolve, reject) => {
-            const request = store.add(authData);
-            request.onsuccess = () => {
-                console.log('Datos de autenticación guardados exitosamente');
-                resolve(request.result);
-            };
-            request.onerror = () => {
-                console.error('Error al guardar datos de autenticación:', request.error);
-                reject(request.error);
-            };
-        });
-    } catch (error) {
-        console.error('Error en saveAuthData:', error);
-        throw error;
-    }
+  try {
+    console.log('Guardando datos de autenticación en IndexedDB:', { ...authData, password: '***' });
+    const store = await getStore(STORES.AUTH, 'readwrite');
+    
+    return new Promise((resolve, reject) => {
+      const request = store.put(authData);
+      request.onsuccess = () => {
+        console.log('Datos de autenticación guardados exitosamente');
+        resolve(request.result);
+      };
+      request.onerror = () => {
+        console.error('Error al guardar datos de autenticación:', request.error);
+        reject(request.error);
+      };
+    });
+  } catch (error) {
+    console.error('Error en saveAuthData:', error);
+    throw error;
+  }
 };
 
-// Limpiar datos de autenticación
+// Función para limpiar datos de autenticación
 export const clearAuthData = async () => {
-    try {
-        console.log('Limpiando datos de autenticación');
-        const store = await getStore(STORES.AUTH, 'readwrite');
-        return new Promise((resolve, reject) => {
-            const request = store.clear();
-            request.onsuccess = () => {
-                console.log('Datos de autenticación limpiados exitosamente');
-                resolve();
-            };
-            request.onerror = () => {
-                console.error('Error al limpiar datos de autenticación:', request.error);
-                reject(request.error);
-            };
-        });
-    } catch (error) {
-        console.error('Error en clearAuthData:', error);
-        throw error;
-    }
+  try {
+    console.log('Limpiando datos de autenticación');
+    const store = await getStore(STORES.AUTH, 'readwrite');
+    return new Promise((resolve, reject) => {
+      const request = store.clear();
+      request.onsuccess = () => {
+        console.log('Datos de autenticación limpiados exitosamente');
+        resolve();
+      };
+      request.onerror = () => {
+        console.error('Error al limpiar datos de autenticación:', request.error);
+        reject(request.error);
+      };
+    });
+  } catch (error) {
+    console.error('Error en clearAuthData:', error);
+    throw error;
+  }
 };
 
 // Inicializar la base de datos al importar el módulo
-console.log('Inicializando IndexedDB al cargar el módulo...')
-initDB().then(() => {
-  console.log('IndexedDB inicializada exitosamente al cargar el módulo')
-}).catch(error => {
-  console.error('Error al inicializar IndexedDB:', error)
-})
+console.log('Inicializando IndexedDB al cargar el módulo...');
+initDB().catch(error => {
+  console.error('Error al inicializar IndexedDB:', error);
+});
 
 export default {
   STORES,

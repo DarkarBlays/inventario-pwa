@@ -468,6 +468,9 @@ export const useProductStore = defineStore('products', {
       // Limpiar la cola de productos offline antes de empezar
       this.offlineProducts = [];
       
+      // Mapeo de IDs temporales a IDs del servidor
+      const idMapping = new Map();
+      
       for (const product of productsToSync) {
         try {
           console.log('Sincronizando producto:', product);
@@ -483,12 +486,18 @@ export const useProductStore = defineStore('products', {
           };
 
           let response;
+          const isTemp = this.isTemporaryId(product.id);
           
           switch (product.action) {
             case 'add':
               console.log('Creando producto en el servidor:', backendProduct);
               response = await api.post('/productos', backendProduct);
               if (response && response.producto) {
+                // Guardar el mapeo del ID temporal al ID real
+                if (isTemp) {
+                  idMapping.set(product.id, response.producto.id);
+                }
+                
                 // Primero eliminar el producto temporal de IndexedDB y del store
                 console.log('Eliminando producto temporal:', product.id);
                 await deleteFromIndexedDB(product.id);
@@ -515,32 +524,71 @@ export const useProductStore = defineStore('products', {
               break;
 
             case 'update':
-              console.log('Actualizando producto en el servidor:', product.id, backendProduct);
-              response = await api.put(`/productos/${product.id}`, backendProduct);
-              if (response && response.producto) {
-                const updatedProduct = {
-                  id: response.producto.id,
-                  name: response.producto.nombre,
-                  description: response.producto.descripcion,
-                  price: Number(response.producto.precio),
-                  stock: Number(response.producto.stock),
-                  image: response.producto.imagen,
-                  enabled: response.producto.activo,
-                  syncStatus: 'synced',
-                  timestamp: new Date().toISOString()
-                };
-                
-                await updateInIndexedDB(updatedProduct);
-                const index = this.products.findIndex(p => p.id === updatedProduct.id);
-                if (index !== -1) {
-                  this.products[index] = updatedProduct;
+              // Si el ID es temporal, buscar su ID real en el mapeo
+              const realId = isTemp ? idMapping.get(product.id) : product.id;
+              
+              if (!realId) {
+                console.log('No se encontró ID real para el producto temporal:', product.id);
+                // Tratar como una nueva creación si no se encuentra el ID real
+                const createResponse = await api.post('/productos', backendProduct);
+                if (createResponse && createResponse.producto) {
+                  const newProduct = {
+                    id: createResponse.producto.id,
+                    name: createResponse.producto.nombre,
+                    description: createResponse.producto.descripcion,
+                    price: Number(createResponse.producto.precio),
+                    stock: Number(createResponse.producto.stock),
+                    image: createResponse.producto.imagen,
+                    enabled: createResponse.producto.activo,
+                    syncStatus: 'synced',
+                    timestamp: new Date().toISOString()
+                  };
+                  
+                  await deleteFromIndexedDB(product.id);
+                  await addToIndexedDB(newProduct);
+                  const index = this.products.findIndex(p => p.id === product.id);
+                  if (index !== -1) {
+                    this.products[index] = newProduct;
+                  } else {
+                    this.products.push(newProduct);
+                  }
+                }
+              } else {
+                console.log('Actualizando producto en el servidor:', realId, backendProduct);
+                response = await api.put(`/productos/${realId}`, backendProduct);
+                if (response && response.producto) {
+                  const updatedProduct = {
+                    id: response.producto.id,
+                    name: response.producto.nombre,
+                    description: response.producto.descripcion,
+                    price: Number(response.producto.precio),
+                    stock: Number(response.producto.stock),
+                    image: response.producto.imagen,
+                    enabled: response.producto.activo,
+                    syncStatus: 'synced',
+                    timestamp: new Date().toISOString()
+                  };
+                  
+                  // Si era un ID temporal, eliminar el producto temporal
+                  if (isTemp) {
+                    await deleteFromIndexedDB(product.id);
+                  }
+                  
+                  await updateInIndexedDB(updatedProduct);
+                  const index = this.products.findIndex(p => p.id === (isTemp ? product.id : updatedProduct.id));
+                  if (index !== -1) {
+                    this.products[index] = updatedProduct;
+                  }
                 }
               }
               break;
 
             case 'delete':
-              console.log('Eliminando producto en el servidor:', product.id);
-              await api.delete(`/productos/${product.id}`);
+              const deleteId = isTemp ? idMapping.get(product.id) : product.id;
+              if (deleteId) {
+                console.log('Eliminando producto en el servidor:', deleteId);
+                await api.delete(`/productos/${deleteId}`);
+              }
               await deleteFromIndexedDB(product.id);
               this.products = this.products.filter(p => p.id !== product.id);
               break;

@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 class ApiService {
     constructor() {
@@ -9,6 +9,7 @@ class ApiService {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         };
+        this.timeout = import.meta.env.VITE_API_TIMEOUT;
     }
 
     getHeaders() {

@@ -9,10 +9,10 @@ import { authService } from '../services/auth.service';
 export const useAuthStore = defineStore('auth', {
     state: () => ({
         usuario: JSON.parse(localStorage.getItem('usuario')) || null,
-        token: localStorage.getItem('token') || null,
+        token: localStorage.getItem(import.meta.env.VITE_TOKEN_KEY) || null,
         error: null,
         loading: false,
-        isOffline: false
+        isOffline: !navigator.onLine
     }),
 
     actions: {
@@ -23,7 +23,7 @@ export const useAuthStore = defineStore('auth', {
                 const estaAutenticado = await authService.estaAutenticado();
                 if (estaAutenticado) {
                     const usuario = await authService.obtenerUsuarioActual();
-                    const token = localStorage.getItem('token');
+                    const token = localStorage.getItem(import.meta.env.VITE_TOKEN_KEY);
                     if (usuario && token) {
                         this.setAuthData(usuario, token);
                         // Si estamos en la página de login, redirigir al inventario
@@ -119,7 +119,7 @@ export const useAuthStore = defineStore('auth', {
             this.token = token;
             this.error = null;
             localStorage.setItem('usuario', JSON.stringify(usuario));
-            localStorage.setItem('token', token);
+            localStorage.setItem(import.meta.env.VITE_TOKEN_KEY, token);
         },
 
         clearAuthData() {
@@ -127,7 +127,7 @@ export const useAuthStore = defineStore('auth', {
             this.token = null;
             this.error = null;
             localStorage.removeItem('usuario');
-            localStorage.removeItem('token');
+            localStorage.removeItem(import.meta.env.VITE_TOKEN_KEY);
         },
 
         setOfflineStatus(status) {
